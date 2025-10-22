@@ -320,8 +320,10 @@ class TextSplitter:
 
 
 class XYGridHelper():
+    page_limiters = ["row", "column"]
+
     @classmethod
-    def INPUT_TYPES(cls):
+    def INPUT_TYPES(s):
         return {
             "required": {
                 "row_list": ("LIST",),
@@ -331,6 +333,7 @@ class XYGridHelper():
                 "row_prefix": ("STRING", {"default": ""}),
                 "column_prefix": ("STRING", {"default": ""}),
                 "page_size": ("INT", {"default": 10}),
+                "page_limiter": (s.page_limiters, {"default": "row"}),
                 "label_length": ("INT", {"default": 50}),
                 "font_size": ("INT", {"default": 50}),
                 "grid_gap": ("INT", {"default": 20}),
@@ -347,24 +350,50 @@ class XYGridHelper():
     def IS_CHANGED(cls, **kwargs):
         return float("NaN")
 
-    def run(self, row_list, column_list, row_prefix, column_prefix, page_size, label_length, font_size, grid_gap, index):
+    def run(self, row_list, column_list, row_prefix, column_prefix, page_size, label_length, font_size, grid_gap, index, page_limiter):
         total_grid_images = len(row_list) * len(column_list)
         adjusted_index = index % total_grid_images
+        
+        if page_limiter == "row":
+            row_index = adjusted_index // len(column_list) % len(row_list)
+            page_index = row_index // page_size
+            images_pr_page = page_size * len(column_list)
+            row_annotation = ";".join([self.insert_newline_on_word_boundaries(self.format_prefix(row_prefix, self.get_label(
+                x)), label_length) for x in row_list[page_index * page_size: (page_index + 1) * page_size]])
+            column_annotation = ";".join([self.insert_newline_on_word_boundaries(
+                self.format_prefix(column_prefix, self.get_label(y)), label_length) for y in column_list])
+            xy_grid_control = (min(images_pr_page, total_grid_images - page_index * page_size), adjusted_index %
+                            images_pr_page, row_annotation, column_annotation, len(column_list), font_size, grid_gap)
+            adjusted_column_index = adjusted_index % len(column_list)
 
-        row_index = adjusted_index // len(column_list) % len(row_list)
-        page_index = row_index // page_size
-        images_pr_page = page_size * len(column_list)
-        row_annotation = ";".join([self.insert_newline_on_word_boundaries(self.format_prefix(row_prefix, self.get_label(
-            x)), label_length) for x in row_list[page_index * page_size: (page_index + 1) * page_size]])
-        column_annotation = ";".join([self.insert_newline_on_word_boundaries(
-            self.format_prefix(column_prefix, self.get_label(y)), label_length) for y in column_list])
-        xy_grid_control = (min(images_pr_page, total_grid_images - page_index * page_size), adjusted_index %
-                           images_pr_page, row_annotation, column_annotation, len(column_list), font_size, grid_gap)
+        elif page_limiter == "column":
+            column_index = adjusted_index // len(row_list)
+            page_index = column_index // page_size
+            row_index = (adjusted_index // page_size) - (page_index * len(row_list))
+            images_pr_page = page_size * len(row_list)
+
+            row_annotation = ";".join([self.insert_newline_on_word_boundaries(self.format_prefix(row_prefix, self.get_label(
+                x)), label_length) for x in row_list])
+            column_annotation = ";".join([self.insert_newline_on_word_boundaries(
+                self.format_prefix(column_prefix, self.get_label(y)), label_length) for y in column_list[page_index * page_size: (page_index + 1) * page_size]])
+
+            # If on last page, and last page contains less than a full grid of images
+            if (page_index + 1) * images_pr_page > total_grid_images:
+                remaining_columns = len(column_list) % page_size
+                adjusted_column_index = (adjusted_index % remaining_columns) + (page_index * page_size)
+                row_index = (adjusted_index // remaining_columns) - (page_index * int((1/remaining_columns) * images_pr_page))
+                xy_grid_control = (min(images_pr_page, total_grid_images - page_index * page_size), adjusted_index %
+                                images_pr_page, row_annotation, column_annotation, remaining_columns, font_size, grid_gap)
+            else:
+                adjusted_column_index = (adjusted_index % page_size) + (page_index * page_size)
+                xy_grid_control = (min(images_pr_page, total_grid_images - page_index * page_size), adjusted_index %
+                                images_pr_page, row_annotation, column_annotation, page_size, font_size, grid_gap)
+
         return {"result": (
             row_list[row_index],
-            column_list[adjusted_index % len(column_list)],
+            column_list[adjusted_column_index],
             xy_grid_control,
-        ), "ui": {"total_images": [total_grid_images]}}
+            ), "ui": {"total_images": [total_grid_images]}}
 
     def get_label(self, item):
         if isinstance(item, PackedAxisItem):
